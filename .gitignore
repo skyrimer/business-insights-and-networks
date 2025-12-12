@@ -39,8 +39,6 @@ vignettes/*.pdf
 # R Environment Variables
 .Renviron
 
-# pkgdown site
-docs/
 
 # translation temp files
 po/*~
@@ -264,3 +262,5 @@ __marimo__/
 .streamlit/secrets.toml
 # RStudio Connect folder
 rsconnect/
+raw_downloads/
+.idea/
