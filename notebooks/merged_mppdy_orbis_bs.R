@@ -37,11 +37,25 @@ normalize_orbis_name <- function(x) {
   gsub("_+", "_", x)
 }
 
+# Ensure Excel imports don't contain empty/NA column names (rename_with() requires valid names)
+ensure_orbis_headers <- function(df) {
+  nm <- names(df)
+  empty <- nm == "" | is.na(nm)
+  if (any(empty)) {
+    nm[empty] <- paste0("unnamed_col_", seq_len(sum(empty)))
+    nm <- make.unique(nm, sep = "_")
+    names(df) <- nm
+  }
+  df
+}
+
 # Apply a name map (new -> normalized old) while ignoring columns that don't exist
 apply_orbis_col_map <- function(df, mapping) {
+  normalized_names <- normalize_orbis_name(names(df))
+  name_lookup <- setNames(names(df), normalized_names)
   for (target in names(mapping)) {
     source <- mapping[[target]]
-    idx <- match(source, names(df))
+    idx <- match(source, normalized_names)
     if (!is.na(idx)) {
       names(df)[idx] <- target
     }
@@ -171,6 +185,7 @@ orbis_col_map <- c(
 orbis_data <- read_excel("./data/Orbis_155_comp_extra_fields.xlsx",
                          sheet = "Results",
                          .name_repair = "minimal") %>%
+  ensure_orbis_headers() %>%
   rename_with(normalize_orbis_name) %>%
   select(-matches("^unnamed"), -matches("_[0-9]+$")) %>%  # drop placeholder/duplicate cols
   { apply_orbis_col_map(., orbis_col_map) } %>%
@@ -229,7 +244,7 @@ edges <- all_alliances %>%
 
 # Build graph from edge list
 firm_graph <- graph_from_data_frame(edges, directed = FALSE)
-firm_graph <- simplify(firm_graph, remove.loops = TRUE, remove.multiple = TRUE)
+firm_graph <- igraph::simplify(firm_graph, remove.loops = TRUE, remove.multiple = TRUE)
 
 # Node colors: focal firms (red) vs partners (grey)
 V(firm_graph)$color <- ifelse(
