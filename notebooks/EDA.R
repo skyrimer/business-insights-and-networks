@@ -1,3 +1,5 @@
+### BY JUNIOR
+
 library(tidyverse)
 library(janitor)
 library(igraph)
@@ -189,3 +191,110 @@ g_6211_asia <- plot_sic_bipartite(
   region       = continent_map$Asia,
   title_region = "Asia"
 )
+
+
+### BY TRINITY
+### BUSINESS AND INSIGHTS - GROUP ASSIGNMENT - EDA
+
+# Import libraries
+library(tidyr)
+library(dplyr)
+library(igraph)
+
+# Set working directory (change to your own path)
+setwd("C:\\Users\\20234582\\OneDrive - TU Eindhoven\\JBE140 (2025-2) Business Insights & Networks")
+
+## SECTION SDC
+# Import SDC data
+sdc_data <- readRDS("SDC_data_2021.rds")
+
+# List of Asian countries
+asia <- c("Japan","Iran","India","Indonesia","Malaysia","Pakistan","Thailand",
+          "Taiwan","Vietnam","China","South Korea","Philippines","Singapore",
+          "Uzbekistan","Brunei","Myanmar(Burma)","Laos","Cambodia","Mongolia",
+          "Afghanistan","Kazakhstan","North Korea","Bangladesh","Sri Lanka",
+          "Armenia","Turkmenistan","Kyrgyzstan","Nepal","Maldives","Bhutan",
+          "Timor-Leste","Oman","Yemen","Jordan","Israel","Lebanon","Iraq",
+          "Bahrain","Qatar","Utd Arab Em","Palestine","Cyprus","Georgia","Turkey")
+
+SIC_code <- 3674
+
+# Subset Asian alliances with SIC_primary = 3679
+asia_alliances <- sdc_data %>%
+  filter(
+    status == "Completed/Signed",
+    date_terminated == "",
+    type == "Strategic Alliance",
+    participant_nation %in% asia,
+    type=="Strategic Alliance",
+    SIC_primary == SIC_code | alliance_SIC_code == SIC_code
+  )
+
+
+
+asia_alliances$participants <- asia_alliances$participants %>% standardize_magerman()
+
+# Number of unique participants
+num_unique_participants <- n_distinct(asia_alliances$participants)
+
+# Range of date_announced
+date_range <- range(asia_alliances$date_announced, na.rm = TRUE)
+
+# Alliance nation counts: in Asia
+alliance_in_asia <- sum(asia_alliances$alliance_nation %in% asia, na.rm = TRUE)
+
+# Status value counts
+status_counts <- table(asia_alliances$status, useNA = "ifany")
+
+# Type value counts
+type_counts <- table(asia_alliances$type, useNA = "ifany")
+
+# Alliance SIC code value counts
+alliance_sic_counts <- sort(table(asia_alliances$alliance_SIC_code, useNA = "ifany"), decreasing = TRUE)
+
+# Combine results into a summary list
+asia_summary <- list(
+  "Unique Participants" = num_unique_participants,
+  "Date Announced Range" = paste(date_range[1], "to", date_range[2]),
+  "Alliances in Asia" = alliance_in_asia,
+  "Status Counts" = status_counts,
+  "Type Counts" = type_counts,
+  "Alliance SIC Counts" = alliance_sic_counts
+)
+
+
+# Visualizing the network
+asia_alliances_net <- asia_alliances %>%
+  select(participants, deal_number) %>%
+  as.matrix()
+
+asia_alliances_graph <- graph_from_data_frame(asia_alliances_net, directed=FALSE)
+
+V(asia_alliances_graph)$type <- ifelse(V(asia_alliances_graph)$name %in%
+                                         asia_alliances_net[,2],
+                                       yes=TRUE, no=FALSE)
+
+asia_alliances_graph <- bipartite_projection(asia_alliances_graph)$proj1
+
+asia_alliances_graph <- simplify(asia_alliances_graph, remove.loops=TRUE,
+                                 remove.multiple=TRUE)
+
+set.seed(2001525)
+plot(asia_alliances_graph, vertex.color="coral2",
+     vertex.label=NA, vertex.size=3, edge_width=3,
+     edge.color=adjustcolor("black", alpha.f=0.7),
+     main=paste0("Network: SIC", SIC_code, "(Asia)\nNodes: ",
+                 vcount(asia_alliances_graph),
+                 " | Edges: ", ecount(asia_alliances_graph))
+)
+
+# Create node metrics data frame
+asia_alliances_data <- data.frame(
+  company_name = V(asia_alliances_graph)$name,
+  degree = degree(asia_alliances_graph),
+  betweenness = betweenness(asia_alliances_graph)
+)
+
+
+
+
