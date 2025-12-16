@@ -1,4 +1,4 @@
-### BUSINESS AND INSIGHTS - GROUP ASSIGNMENT - EDA
+ ### BUSINESS AND INSIGHTS - GROUP ASSIGNMENT - EDA
 
 
 # Setup -------------------------------------------------------------------
@@ -8,12 +8,10 @@ library(dplyr)
 library(igraph)
 library(purrr)
 
-# Set working directory (change to your own path)
-setwd("C:\\Users\\20234582\\OneDrive - TU Eindhoven\\JBE140 (2025-2) Business Insights & Networks")
 
 # Section SDC -------------------------------------------------------------
 # Import SDC data
-sdc_data <- readRDS("SDC_data_2021.rds")
+sdc_data <- readRDS("data/SDC_data_2021.rds")
 
 # List of Asian countries
 asia <- c("Japan","Iran","India","Indonesia","Malaysia","Pakistan","Thailand",
@@ -43,7 +41,7 @@ sdc_filt <- sdc_data %>%
 #install.packages("devtools")
 #devtools::install_github("stasvlasov/nstandr")
 #library(nstandr)
-#sdc_filt$participants <- sdc_filt$participants %>% standardize_magerman()
+# sdc_filt$participants <- sdc_filt$participants %>% standardize_magerman()
 
 # 2. Identify focal firms
 focal_firms <- sdc_filt %>%
@@ -118,7 +116,6 @@ network_data %>%
   group_by(participants) %>%
   filter(n_distinct(participant_nation) > 1) %>%
   arrange(participants, participant_nation)
-  # There are no duplicates
 
 
 

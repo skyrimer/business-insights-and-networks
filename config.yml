@@ -1,0 +1,3 @@
+default:
+  focal_industry_sic_code: 3571
+  continent: "Asia"
