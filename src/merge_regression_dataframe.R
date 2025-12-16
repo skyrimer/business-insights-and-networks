@@ -4,6 +4,7 @@ library(tidyr)
 library(arrow)
 library(stringdist)
 library(stringr)
+library(config)
 
 if (!requireNamespace("nstandr", quietly = TRUE)) {
   if (!requireNamespace("devtools", quietly = TRUE)) install.packages("devtools")
@@ -69,13 +70,18 @@ find_best_match_hybrid <- function(name, candidates_df, name_col, threshold = 0.
 }
 
 # ----------------------------------------
+# Load Configuration
+# ----------------------------------------
+cfg <- config::get()
+
+# ----------------------------------------
 # 1. Load Data Sources
 # ----------------------------------------
 message("Loading datasets...")
 
-patent_data <- read_parquet("data/firm_patent_variables.parquet")
-sdc_data <- read.csv("data/filtered_sdc.csv", stringsAsFactors = FALSE)
-orbis_data <- read.csv("data/orbis_cleaned.csv", stringsAsFactors = FALSE)
+patent_data <- read_parquet(cfg$patents_processed_file)
+sdc_data <- read.csv(cfg$sdc_filtered_file, stringsAsFactors = FALSE)
+orbis_data <- read.csv(cfg$orbis_cleaned_file, stringsAsFactors = FALSE)
 
 message("Patent data rows: ", nrow(patent_data))
 message("SDC data rows: ", nrow(sdc_data))
@@ -363,8 +369,8 @@ print(table(merged_data$orbis_match_type))
 # ----------------------------------------
 # 8. Save Output
 # ----------------------------------------
-write_parquet(merged_data, "data/sdc_patents_orbis_merged.parquet", compression = "gzip")
-write.csv(merged_data, "data/sdc_patents_orbis_merged.csv", row.names = FALSE)
+write_parquet(merged_data, cfg$merged_data_parquet, compression = "gzip")
+write.csv(merged_data, cfg$merged_data_csv, row.names = FALSE)
 
-message("\nSaved to data/sdc_patents_orbis_merged.parquet")
+message("\nSaved to ", cfg$merged_data_parquet)
 message("Done.")

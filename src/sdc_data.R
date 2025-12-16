@@ -156,14 +156,15 @@ cfg <- config::get()
 # Access values
 focal_industry_sic_code <- cfg$focal_industry_sic_code
 continent <- cfg$continent
+min_date <- cfg$min_date
 
 # Example call with date and termination filters
 result <- process_and_save_sdc(
-  rds_path = "raw_downloads/SDC_data_2021.rds",
+  rds_path = cfg$sdc_raw_file,
   target_sic = focal_industry_sic_code,
   target_continent = continent,
-  out_path = "data/filtered_sdc.csv",
-  min_date = "1999-12-31",
+  out_path = cfg$sdc_filtered_file,
+  min_date = min_date,
   exclude_terminated = TRUE
 )
 plot_network(result, target_sic = focal_industry_sic_code, target_continent = continent)

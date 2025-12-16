@@ -3,9 +3,11 @@ library(tidyverse)
 library(arrow)
 library(countrycode)
 library(fs)
+library(config)
 
 # --- Configuration ---
-path <- "./raw_downloads/patents_view/"
+cfg <- config::get()
+path <- cfg$patents_raw_dir
 files <- dir_ls(path, glob = "*.csv")
 
 # --- Load Files ---
@@ -130,4 +132,4 @@ firm_df <- firm_df %>%
 
 # --- Output ---
 message(paste("Saving processed data for", nrow(firm_df), "unique assignees."))
-write_parquet(firm_df, "./data/firm_patent_variables.parquet", compression = "gzip")
+write_parquet(firm_df, cfg$patents_processed_file, compression = "gzip")

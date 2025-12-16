@@ -9,14 +9,20 @@ library(arrow)
 library(igraph)
 library(purrr)
 library(countrycode)
+library(config)
+
+# ----------------------------------------
+# Load Configuration
+# ----------------------------------------
+cfg <- config::get()
 
 # ----------------------------------------
 # 1. Load Merged Data
 # ----------------------------------------
 message("Loading merged dataset...")
 
-merged_data <- read_parquet("data/sdc_patents_orbis_merged.parquet")
-sdc_data <- read.csv("data/filtered_sdc.csv", stringsAsFactors = FALSE)
+merged_data <- read_parquet(cfg$merged_data_parquet)
+sdc_data <- read.csv(cfg$sdc_filtered_file, stringsAsFactors = FALSE)
 
 message("Merged data rows: ", nrow(merged_data))
 
@@ -514,12 +520,12 @@ message("      SAVING RESULTS")
 message("========================================\n")
 
 # Save analysis sample
-write_parquet(analysis_sample, "data/analysis_sample.parquet", compression = "gzip")
-write.csv(analysis_sample, "data/analysis_sample.csv", row.names = FALSE)
+write_parquet(analysis_sample, cfg$analysis_sample_parquet, compression = "gzip")
+write.csv(analysis_sample, cfg$analysis_sample_csv, row.names = FALSE)
 
 # Save model comparison
-write.csv(model_comparison, "data/model_comparison.csv", row.names = FALSE)
+write.csv(model_comparison, cfg$model_comparison_file, row.names = FALSE)
 
-message("Analysis sample saved to: data/analysis_sample.parquet")
-message("Model comparison saved to: data/model_comparison.csv")
+message("Analysis sample saved to: ", cfg$analysis_sample_parquet)
+message("Model comparison saved to: ", cfg$model_comparison_file)
 message("\nDone.")

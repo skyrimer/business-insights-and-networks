@@ -1,6 +1,7 @@
 
 library(dplyr)
 library(readxl)
+library(config)
 
 # We use nstandr for name standardization (Magerman method)
 if (!requireNamespace("nstandr", quietly = TRUE)) {
@@ -85,12 +86,17 @@ orbis_numeric_cols <- c(
 )
 
 # ----------------------------------------
+# Load Configuration
+# ----------------------------------------
+cfg <- config::get()
+
+# ----------------------------------------
 # Load and Clean Orbis Data
 # ----------------------------------------
 message("Loading Orbis data...")
 
 orbis_data <- read_excel(
-  "raw_downloads/Orbis_155_comp_extra_fields.xlsx",
+  cfg$orbis_raw_file,
   sheet = "Results",
   .name_repair = "minimal"
 ) %>%
@@ -186,6 +192,6 @@ orbis_data$company_name_std <- orbis_data$company_name %>%
 # ----------------------------------------
 # Save Output
 # ----------------------------------------
-write.csv(orbis_data, "data/orbis_cleaned.csv", row.names = FALSE)
-message("\nSaved to data/orbis_cleaned.csv")
+write.csv(orbis_data, cfg$orbis_cleaned_file, row.names = FALSE)
+message("\nSaved to ", cfg$orbis_cleaned_file)
 message("Done.")

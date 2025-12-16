@@ -1,3 +1,30 @@
 default:
+  # Analysis parameters
   focal_industry_sic_code: 3571
   continent: "Asia"
+  min_date: "1999-12-31"
+
+  # Raw data directories
+  raw_data_dir: "raw_downloads"
+
+  # Processed data directory
+  data_dir: "data"
+
+  # Raw input files
+  orbis_raw_file: "raw_downloads/Orbis_155_comp_extra_fields.xlsx"
+  sdc_raw_file: "raw_downloads/SDC_data_2021.rds"
+  patents_raw_dir: "raw_downloads/patents_view"
+
+  # Intermediate processed files
+  orbis_cleaned_file: "data/orbis_cleaned.csv"
+  sdc_filtered_file: "data/filtered_sdc.csv"
+  patents_processed_file: "data/firm_patent_variables.parquet"
+
+  # Merged data files
+  merged_data_parquet: "data/sdc_patents_orbis_merged.parquet"
+  merged_data_csv: "data/sdc_patents_orbis_merged.csv"
+
+  # Analysis output files
+  analysis_sample_parquet: "data/analysis_sample.parquet"
+  analysis_sample_csv: "data/analysis_sample.csv"
+  model_comparison_file: "data/model_comparison.csv"
