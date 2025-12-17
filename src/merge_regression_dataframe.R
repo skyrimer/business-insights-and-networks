@@ -1,4 +1,3 @@
-
 library(dplyr)
 library(tidyr)
 library(arrow)
@@ -87,8 +86,45 @@ message("Patent data rows: ", nrow(patent_data))
 message("SDC data rows: ", nrow(sdc_data))
 message("Orbis data rows: ", nrow(orbis_data))
 
+# ============================================
+# SDC + ORBIS MERGE (Direct join on company names)
+# ============================================
+# Note: ORBIS company_name has been pre-renamed to match SDC format in orbis_data.R
+message("\n========================================")
+message("    SDC + ORBIS MERGE (DIRECT JOIN)")
+message("========================================")
+
+# Store original names before any standardization
+sdc_data <- sdc_data %>%
+  mutate(participants_original = participants)
+
+# Select ORBIS columns to merge
+orbis_merge_cols <- c(
+  "company_name", "country_iso", "city", "nace_code", "entity_type",
+  "employees_last_value", "total_assets_eur", "total_assets_usd",
+  "n_companies_group", "n_shareholders", "n_subsidiaries",
+  "roa", "rd_ratio", "export_ratio", "export_revenue",
+  "long_term_debt", "is_guo", "is_controlled_sub", "size_classification"
+)
+
+orbis_for_merge <- orbis_data %>%
+  select(any_of(orbis_merge_cols))
+
+# Direct join: SDC participants -> ORBIS company_name
+merged_data <- sdc_data %>%
+  left_join(
+    orbis_for_merge,
+    by = c("participants_original" = "company_name")
+  ) %>%
+  mutate(orbis_match_type = ifelse(!is.na(country_iso) | !is.na(employees_last_value) | !is.na(total_assets_eur),
+                                     "matched", "unmatched"))
+
+orbis_matched <- sum(merged_data$orbis_match_type == "matched")
+message("Successfully matched with ORBIS: ", orbis_matched, " / ", nrow(merged_data),
+        " (", round(orbis_matched / nrow(merged_data) * 100, 1), "%)")
+
 # ----------------------------------------
-# 2. Standardize Company Names
+# 2. Standardize Company Names (AFTER MERGE)
 # ----------------------------------------
 message("\nStandardizing company names...")
 
@@ -100,35 +136,11 @@ patent_data <- patent_data %>%
     prefix_2 = substr(tolower(assignee_std), 1, 2)
   )
 
-sdc_data <- sdc_data %>%
+merged_data <- merged_data %>%
   mutate(
-    participants_original = participants,
-    participants_std = participants %>% trimws() %>% standardize_magerman()
+    participants_std = participants_original %>% trimws() %>% standardize_magerman()
   )
 
-orbis_data <- orbis_data %>%
-  mutate(
-    company_name_std = company_name_std %>% trimws(),
-    prefix_3 = substr(tolower(company_name_std), 1, 3),
-    prefix_2 = substr(tolower(company_name_std), 1, 2)
-  )
-
-# ----------------------------------------
-# 3. Create Company-Level SDC Summary
-# ----------------------------------------
-sdc_companies <- sdc_data %>%
-  group_by(participants_std) %>%
-  summarise(
-    company_name = first(participants_original),
-    n_deals = n_distinct(deal_number),
-    countries = paste(unique(participant_nation), collapse = "; "),
-    primary_sic = first(sic_primary),
-    first_deal_date = min(date_announced, na.rm = TRUE),
-    last_deal_date = max(date_announced, na.rm = TRUE),
-    .groups = "drop"
-  )
-
-message("Unique companies in SDC: ", nrow(sdc_companies))
 
 # ============================================
 # PATENT MATCHING
@@ -138,11 +150,11 @@ message("         PATENT MATCHING")
 message("========================================")
 
 # ----------------------------------------
-# 4. Phase 1: Exact Patent Matching
+# Phase 1: Exact Patent Matching
 # ----------------------------------------
 message("\n--- Phase 1: Exact Matching ---")
 
-merged_data <- sdc_companies %>%
+merged_data <- merged_data %>%
   left_join(
     patent_data %>% select(-assignee_original, -prefix_3, -prefix_2),
     by = c("participants_std" = "assignee_std")
@@ -154,23 +166,28 @@ message("Exact matches: ", exact_patent_matches, " / ", nrow(merged_data),
         " (", round(exact_patent_matches / nrow(merged_data) * 100, 1), "%)")
 
 # ----------------------------------------
-# 5. Phase 2: Hybrid Fuzzy Patent Matching
+# Phase 2: Hybrid Fuzzy Patent Matching
 # ----------------------------------------
 message("\n--- Phase 2: Hybrid Fuzzy Matching ---")
 
-unmatched_idx <- which(is.na(merged_data$assignee))
-message("Companies without exact match: ", length(unmatched_idx))
+# Get unique unmatched company names to avoid redundant matching
+unmatched_companies <- merged_data %>%
+  filter(is.na(assignee)) %>%
+  distinct(participants_std) %>%
+  pull(participants_std)
 
-if (length(unmatched_idx) > 0) {
+message("Unique companies without exact match: ", length(unmatched_companies))
+
+if (length(unmatched_companies) > 0) {
   message("Running hybrid matching (Jaro-Winkler + Levenshtein + Jaccard)...")
 
-  total_unmatched <- length(unmatched_idx)
+  total_unmatched <- length(unmatched_companies)
   pb_interval <- max(1, floor(total_unmatched / 10))
 
   fuzzy_results <- vector("list", total_unmatched)
 
-  for (i in seq_along(unmatched_idx)) {
-    name <- merged_data$participants_std[unmatched_idx[i]]
+  for (i in seq_along(unmatched_companies)) {
+    name <- unmatched_companies[i]
     fuzzy_results[[i]] <- find_best_match_hybrid(name, patent_data, "assignee_std", threshold = 0.85)
 
     if (i %% pb_interval == 0) {
@@ -178,35 +195,44 @@ if (length(unmatched_idx) > 0) {
     }
   }
 
-  fuzzy_matches_std <- sapply(fuzzy_results, function(x) x$match)
-  fuzzy_scores <- sapply(fuzzy_results, function(x) x$score)
+  # Create lookup table for fuzzy matches
+  fuzzy_lookup <- data.frame(
+    participants_std = unmatched_companies,
+    fuzzy_match_std = sapply(fuzzy_results, function(x) x$match),
+    stringsAsFactors = FALSE
+  )
 
-  fuzzy_patent_success <- sum(!is.na(fuzzy_matches_std))
-  message("\nHybrid matches found: ", fuzzy_patent_success, " / ", length(unmatched_idx))
+  fuzzy_patent_success <- sum(!is.na(fuzzy_lookup$fuzzy_match_std))
+  message("\nHybrid matches found: ", fuzzy_patent_success, " / ", length(unmatched_companies))
 
   if (fuzzy_patent_success > 0) {
-    valid_scores <- fuzzy_scores[!is.na(fuzzy_scores)]
+    valid_scores <- sapply(fuzzy_results, function(x) x$score)
+    valid_scores <- valid_scores[!is.na(valid_scores)]
     message("  Score range: ", round(min(valid_scores), 3), " - ", round(max(valid_scores), 3))
     message("  Mean score: ", round(mean(valid_scores), 3))
 
-    for (i in seq_along(unmatched_idx)) {
-      if (!is.na(fuzzy_matches_std[i])) {
-        row_idx <- unmatched_idx[i]
-        patent_row <- patent_data %>%
-          filter(assignee_std == fuzzy_matches_std[i]) %>%
-          slice(1)
+    # Join fuzzy matches back to merged_data
+    fuzzy_lookup <- fuzzy_lookup %>%
+      filter(!is.na(fuzzy_match_std)) %>%
+      left_join(
+        patent_data %>% select(-assignee_original, -prefix_3, -prefix_2),
+        by = c("fuzzy_match_std" = "assignee_std")
+      )
 
-        if (nrow(patent_row) > 0) {
-          merged_data$assignee[row_idx] <- patent_row$assignee
-          merged_data$total_applications[row_idx] <- patent_row$total_applications
-          merged_data$granted_patents[row_idx] <- patent_row$granted_patents
-          merged_data$avg_ipc_scope[row_idx] <- patent_row$avg_ipc_scope
-          merged_data$avg_team_size[row_idx] <- patent_row$avg_team_size
-          merged_data$grant_success_rate[row_idx] <- patent_row$grant_success_rate
-          merged_data$total_ipc_mentions[row_idx] <- patent_row$total_ipc_mentions
-          merged_data$tech_specialist_hhi[row_idx] <- patent_row$tech_specialist_hhi
-          merged_data$patent_match_type[row_idx] <- "fuzzy"
-        }
+    # Update merged_data with fuzzy matches
+    for (i in seq_len(nrow(fuzzy_lookup))) {
+      match_rows <- which(merged_data$participants_std == fuzzy_lookup$participants_std[i] &
+                          is.na(merged_data$assignee))
+      if (length(match_rows) > 0) {
+        merged_data$assignee[match_rows] <- fuzzy_lookup$assignee[i]
+        merged_data$total_applications[match_rows] <- fuzzy_lookup$total_applications[i]
+        merged_data$granted_patents[match_rows] <- fuzzy_lookup$granted_patents[i]
+        merged_data$avg_ipc_scope[match_rows] <- fuzzy_lookup$avg_ipc_scope[i]
+        merged_data$avg_team_size[match_rows] <- fuzzy_lookup$avg_team_size[i]
+        merged_data$grant_success_rate[match_rows] <- fuzzy_lookup$grant_success_rate[i]
+        merged_data$total_ipc_mentions[match_rows] <- fuzzy_lookup$total_ipc_mentions[i]
+        merged_data$tech_specialist_hhi[match_rows] <- fuzzy_lookup$tech_specialist_hhi[i]
+        merged_data$patent_match_type[match_rows] <- "fuzzy"
       }
     }
   }
@@ -228,149 +254,48 @@ merged_data <- merged_data %>%
   )
 
 # ============================================
-# ORBIS MATCHING
-# ============================================
-message("\n========================================")
-message("         ORBIS MATCHING")
-message("========================================")
-
-# Orbis columns to merge
-orbis_merge_cols <- c(
-  "company_name_std", "country_iso", "city", "nace_code", "entity_type",
-  "employees_last_value", "current_assets_usd", "n_companies_group",
-  "n_shareholders", "n_subsidiaries", "roa_net_income", "total_assets_eur",
-  "rnd_over_operating", "export_over_operating", "long_term_debt_eur", "is_guo"
-)
-
-orbis_for_merge <- orbis_data %>%
-  select(any_of(c(orbis_merge_cols, "prefix_3", "prefix_2")))
-
-# ----------------------------------------
-# 6. Phase 1: Exact Orbis Matching
-# ----------------------------------------
-message("\n--- Phase 1: Exact Matching ---")
-
-merged_data <- merged_data %>%
-  left_join(
-    orbis_for_merge %>% select(-prefix_3, -prefix_2),
-    by = c("participants_std" = "company_name_std")
-  ) %>%
-  mutate(orbis_match_type = ifelse(!is.na(employees_last_value), "exact", NA_character_))
-
-exact_orbis_matches <- sum(!is.na(merged_data$employees_last_value))
-message("Exact matches: ", exact_orbis_matches, " / ", nrow(merged_data),
-        " (", round(exact_orbis_matches / nrow(merged_data) * 100, 1), "%)")
-
-# ----------------------------------------
-# 7. Phase 2: Hybrid Fuzzy Orbis Matching
-# ----------------------------------------
-message("\n--- Phase 2: Hybrid Fuzzy Matching ---")
-
-unmatched_orbis_idx <- which(is.na(merged_data$employees_last_value))
-message("Companies without exact Orbis match: ", length(unmatched_orbis_idx))
-
-if (length(unmatched_orbis_idx) > 0) {
-  message("Running hybrid matching for Orbis...")
-
-  total_unmatched_orbis <- length(unmatched_orbis_idx)
-  pb_interval_orbis <- max(1, floor(total_unmatched_orbis / 10))
-
-  fuzzy_orbis_results <- vector("list", total_unmatched_orbis)
-
-  for (i in seq_along(unmatched_orbis_idx)) {
-    name <- merged_data$participants_std[unmatched_orbis_idx[i]]
-    fuzzy_orbis_results[[i]] <- find_best_match_hybrid(name, orbis_for_merge, "company_name_std", threshold = 0.85)
-
-    if (i %% pb_interval_orbis == 0) {
-      message("  Progress: ", round(i / total_unmatched_orbis * 100), "%")
-    }
-  }
-
-  fuzzy_orbis_matches_std <- sapply(fuzzy_orbis_results, function(x) x$match)
-  fuzzy_orbis_scores <- sapply(fuzzy_orbis_results, function(x) x$score)
-
-  fuzzy_orbis_success <- sum(!is.na(fuzzy_orbis_matches_std))
-  message("\nHybrid matches found: ", fuzzy_orbis_success, " / ", length(unmatched_orbis_idx))
-
-  if (fuzzy_orbis_success > 0) {
-    valid_orbis_scores <- fuzzy_orbis_scores[!is.na(fuzzy_orbis_scores)]
-    message("  Score range: ", round(min(valid_orbis_scores), 3), " - ", round(max(valid_orbis_scores), 3))
-    message("  Mean score: ", round(mean(valid_orbis_scores), 3))
-
-    for (i in seq_along(unmatched_orbis_idx)) {
-      if (!is.na(fuzzy_orbis_matches_std[i])) {
-        row_idx <- unmatched_orbis_idx[i]
-        orbis_row <- orbis_data %>%
-          filter(company_name_std == fuzzy_orbis_matches_std[i]) %>%
-          slice(1)
-
-        if (nrow(orbis_row) > 0) {
-          merged_data$country_iso[row_idx] <- orbis_row$country_iso
-          merged_data$city[row_idx] <- orbis_row$city
-          merged_data$nace_code[row_idx] <- orbis_row$nace_code
-          merged_data$entity_type[row_idx] <- orbis_row$entity_type
-          merged_data$employees_last_value[row_idx] <- orbis_row$employees_last_value
-          merged_data$current_assets_usd[row_idx] <- orbis_row$current_assets_usd
-          merged_data$n_companies_group[row_idx] <- orbis_row$n_companies_group
-          merged_data$n_shareholders[row_idx] <- orbis_row$n_shareholders
-          merged_data$n_subsidiaries[row_idx] <- orbis_row$n_subsidiaries
-          merged_data$roa_net_income[row_idx] <- orbis_row$roa_net_income
-          merged_data$total_assets_eur[row_idx] <- orbis_row$total_assets_eur
-          merged_data$rnd_over_operating[row_idx] <- orbis_row$rnd_over_operating
-          merged_data$export_over_operating[row_idx] <- orbis_row$export_over_operating
-          merged_data$long_term_debt_eur[row_idx] <- orbis_row$long_term_debt_eur
-          merged_data$is_guo[row_idx] <- orbis_row$is_guo
-          merged_data$orbis_match_type[row_idx] <- "fuzzy"
-        }
-      }
-    }
-  }
-} else {
-  fuzzy_orbis_success <- 0
-}
-
-merged_data <- merged_data %>%
-  mutate(orbis_match_type = replace_na(orbis_match_type, "unmatched"))
-
-# ============================================
 # FINAL SUMMARY
 # ============================================
 total_patent_matched <- sum(merged_data$total_applications > 0)
-total_orbis_matched <- sum(!is.na(merged_data$employees_last_value))
+total_orbis_matched <- sum(merged_data$orbis_match_type == "mapped")
+unique_companies <- n_distinct(merged_data$participants_std)
+unique_deals <- n_distinct(merged_data$deal_number)
 
 message("\n========================================")
 message("         FINAL MERGE SUMMARY")
 message("========================================")
-message("Total companies:        ", nrow(merged_data))
+message("Total rows:             ", nrow(merged_data))
+message("Unique companies:       ", unique_companies)
+message("Unique deals:           ", unique_deals)
+message("----------------------------------------")
+message("SDC + ORBIS (via mapping):")
+message("  Matched rows:         ", total_orbis_matched,
+        " (", round(total_orbis_matched / nrow(merged_data) * 100, 1), "%)")
+message("  Unmatched rows:       ", nrow(merged_data) - total_orbis_matched,
+        " (", round((nrow(merged_data) - total_orbis_matched) / nrow(merged_data) * 100, 1), "%)")
 message("----------------------------------------")
 message("PATENT MATCHING:")
 message("  Exact matches:        ", exact_patent_matches,
         " (", round(exact_patent_matches / nrow(merged_data) * 100, 1), "%)")
-message("  Fuzzy matches:        ", fuzzy_patent_success,
-        " (", round(fuzzy_patent_success / nrow(merged_data) * 100, 1), "%)")
+message("  Fuzzy matches:        ", sum(merged_data$patent_match_type == "fuzzy"),
+        " (", round(sum(merged_data$patent_match_type == "fuzzy") / nrow(merged_data) * 100, 1), "%)")
 message("  Total matched:        ", total_patent_matched,
         " (", round(total_patent_matched / nrow(merged_data) * 100, 1), "%)")
-message("----------------------------------------")
-message("ORBIS MATCHING:")
-message("  Exact matches:        ", exact_orbis_matches,
-        " (", round(exact_orbis_matches / nrow(merged_data) * 100, 1), "%)")
-message("  Fuzzy matches:        ", fuzzy_orbis_success,
-        " (", round(fuzzy_orbis_success / nrow(merged_data) * 100, 1), "%)")
-message("  Total matched:        ", total_orbis_matched,
-        " (", round(total_orbis_matched / nrow(merged_data) * 100, 1), "%)")
 message("========================================")
-
-message("\nPatent match type distribution:")
-print(table(merged_data$patent_match_type))
 
 message("\nOrbis match type distribution:")
 print(table(merged_data$orbis_match_type))
 
+message("\nPatent match type distribution:")
+print(table(merged_data$patent_match_type))
+
 # ----------------------------------------
-# 8. Save Output
+# Save Output
 # ----------------------------------------
 write_parquet(merged_data, cfg$merged_data_parquet, compression = "gzip")
 write.csv(merged_data, cfg$merged_data_csv, row.names = FALSE)
+write_parquet(merged_data, cfg$merged_data_parquet, compression = "gzip")
 
-message("\nSaved to ", cfg$merged_data_parquet)
+message("\nSaved CSV to: ", cfg$merged_data_csv)
+message("Saved Parquet to: ", cfg$merged_data_parquet)
 message("Done.")

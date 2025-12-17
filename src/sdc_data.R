@@ -8,7 +8,7 @@ library(countrycode)
 library(janitor)
 library(config)
 
-process_and_save_sdc <- function(rds_path, target_sic, target_continent, out_path,
+process_and_save_sdc <- function(rds_path, target_sic, target_country, out_path,
                                   min_date = NULL, exclude_terminated = TRUE) {
   # 1. Load data and clean column names
   sdc <- readRDS(rds_path) %>%
@@ -50,23 +50,23 @@ process_and_save_sdc <- function(rds_path, target_sic, target_continent, out_pat
   sdc_clean <- sdc_clean %>%
     filter(!is.na(continent))
 
-  # 7. Find focal FIRMS: unique company names that appear in target_continent with target_sic
+  # 7. Find focal FIRMS: unique company names that appear in target_country with target_sic
   focal_firms <- sdc_clean %>%
-    filter(sic_primary == target_sic, continent == target_continent) %>%
+    filter(sic_primary == target_sic, participant_country == target_country) %>%
     pull(participants) %>%
     unique()
 
-  # 8. Find deals where focal firms participate FROM the target continent
+  # 8. Find deals where focal firms participate FROM the target country
   #    (not just any deal the focal firm is in)
   relevant_deals <- sdc_clean %>%
     filter(
       participants %in% focal_firms,
-      continent == target_continent
+      participant_country == target_country
     ) %>%
     distinct(deal_number) %>%
     pull(deal_number)
 
-  # 9. Expand: include ALL participants in those deals (may be outside target_continent)
+  # 9. Expand: include ALL participants in those deals (may be outside target_country)
   result_df <- sdc_clean %>%
     filter(deal_number %in% relevant_deals)
 
@@ -79,9 +79,9 @@ process_and_save_sdc <- function(rds_path, target_sic, target_continent, out_pat
 
   total_deals <- length(relevant_deals)
 
-  message("Focal companies (sic_primary=", target_sic, ", continent=", target_continent, "): ", focal_company_count)
+  message("Focal companies (sic_primary=", target_sic, ", country=", target_country, "): ", focal_company_count)
   message("Total companies in expanded network: ", total_companies)
-  message("Total deals involving focal companies (from ", target_continent, "): ", total_deals)
+  message("Total deals involving focal companies (from ", target_country, "): ", total_deals)
 
   # 11. Save to file
   write.csv(result_df, out_path, row.names = FALSE)
@@ -89,9 +89,10 @@ process_and_save_sdc <- function(rds_path, target_sic, target_continent, out_pat
   result_df
 }
 
-plot_network <- function(dataframe, target_sic, target_continent) {
+
+plot_network <- function(dataframe, target_sic, target_country) {
   focal_firms <- dataframe %>%
-    filter(sic_primary == target_sic, continent == target_continent) %>%
+    filter(sic_primary == target_sic, participant_country == target_country) %>%
     pull(participants) %>%
     unique()
 
@@ -128,7 +129,7 @@ plot_network <- function(dataframe, target_sic, target_continent) {
     edge.color = "grey80",
     main = paste0(
       "Strategic Alliances Network\n",
-      "Focal SIC = ", target_sic, ", Continent = ", target_continent, "\n",
+      "Focal SIC = ", target_sic, ", Country = ", target_country, "\n",
       "Nodes: ", vcount(g), " | Edges: ", ecount(g)
     )
   )
@@ -155,16 +156,16 @@ cfg <- config::get()
 
 # Access values
 focal_industry_sic_code <- cfg$focal_industry_sic_code
-continent <- cfg$continent
+focal_country <- cfg$focal_country
 min_date <- cfg$min_date
 
 # Example call with date and termination filters
 result <- process_and_save_sdc(
   rds_path = cfg$sdc_raw_file,
   target_sic = focal_industry_sic_code,
-  target_continent = continent,
+  target_country = focal_country,
   out_path = cfg$sdc_filtered_file,
   min_date = min_date,
   exclude_terminated = TRUE
 )
-plot_network(result, target_sic = focal_industry_sic_code, target_continent = continent)
+plot_network(result, target_sic = focal_industry_sic_code, target_country = focal_country)

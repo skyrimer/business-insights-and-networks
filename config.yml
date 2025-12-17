@@ -1,8 +1,8 @@
 default:
   # Analysis parameters
   focal_industry_sic_code: 3571
-  continent: "Asia"
-  min_date: "1999-12-31"
+  focal_country: "United States"
+  min_date: "2009-12-31"
 
   # Raw data directories
   raw_data_dir: "raw_downloads"
@@ -11,7 +11,7 @@ default:
   data_dir: "data"
 
   # Raw input files
-  orbis_raw_file: "raw_downloads/Orbis_155_comp_extra_fields.xlsx"
+  orbis_raw_file: "raw_downloads/Export 17_12_2025 18_26.xlsx"
   sdc_raw_file: "raw_downloads/SDC_data_2021.rds"
   patents_raw_dir: "raw_downloads/patents_view"
 

@@ -11,183 +11,251 @@ if (!requireNamespace("nstandr", quietly = TRUE)) {
 library(nstandr)
 
 # ----------------------------------------
-# Helper Functions
-# ----------------------------------------
-
-# Normalize messy Excel headers
-normalize_orbis_name <- function(x) {
-  x <- gsub("\\s+", " ", x)
-  x <- trimws(x)
-  x <- tolower(x)
-  x <- gsub("[^a-z0-9]", "_", x)
-  gsub("_+", "_", x)
-}
-
-# Ensure no empty/NA column names
-ensure_orbis_headers <- function(df) {
-  nm <- names(df)
-  empty <- nm == "" | is.na(nm)
-  if (any(empty)) {
-    nm[empty] <- paste0("unnamed_col_", seq_len(sum(empty)))
-    nm <- make.unique(nm, sep = "_")
-    names(df) <- nm
-  }
-  df
-}
-
-# Apply column name mapping
-apply_orbis_col_map <- function(df, mapping) {
-  normalized_names <- normalize_orbis_name(names(df))
-  for (target in names(mapping)) {
-    source <- mapping[[target]]
-    idx <- match(source, normalized_names)
-    if (!is.na(idx)) {
-      names(df)[idx] <- target
-    }
-  }
-  df
-}
-
-# ----------------------------------------
-# Configuration
-# ----------------------------------------
-orbis_col_map <- c(
-  company_name = "company_name_latin_alphabet",
-  country_iso = "country_iso_code",
-  city = "city_latin_alphabet",
-  nace_code = "nace_rev_2_core_code_4_digits",
-  consolidation_code = "consolidation_code",
-  last_avail_year = "last_avail_year",
-  country = "country",
-  entity_type = "entity_type",
-  employees_last_value = "number_of_employees_last_avail_value",
-  current_assets_usd = "current_assets_th_usd_last_avail_yr",
-  n_companies_group = "no_of_companies_in_corporate_group",
-  n_shareholders = "no_of_shareholders",
-  n_subsidiaries = "no_of_subsidiaries",
-  roa_net_income = "roa_using_net_income_last_avail_yr",
-  total_assets_eur = "total_assets_th_eur_last_avail_yr",
-  rnd_over_operating = "r_d_expenses_operating_revenue_last_avail_yr",
-  export_over_operating = "export_revenue_operating_revenue_last_avail_yr",
-  long_term_debt_eur = "long_term_debt_th_eur_last_avail_yr"
-)
-
-orbis_numeric_cols <- c(
-  "employees_last_value",
-  "current_assets_usd",
-  "n_companies_group",
-  "n_shareholders",
-  "n_subsidiaries",
-  "roa_net_income",
-  "total_assets_eur",
-  "rnd_over_operating",
-  "export_over_operating",
-  "long_term_debt_eur"
-)
-
-# ----------------------------------------
 # Load Configuration
 # ----------------------------------------
 cfg <- config::get()
 
 # ----------------------------------------
-# Load and Clean Orbis Data
+# Load Orbis Data
 # ----------------------------------------
 message("Loading Orbis data...")
 
-orbis_data <- read_excel(
+# Read the Excel file
+orbis_raw <- read_excel(
   cfg$orbis_raw_file,
   sheet = "Results",
-  .name_repair = "minimal"
-) %>%
-  ensure_orbis_headers() %>%
-  rename_with(normalize_orbis_name) %>%
-  select(-matches("^unnamed"), -matches("_[0-9]+$")) %>%
-  { apply_orbis_col_map(., orbis_col_map) } %>%
-  # Convert "n.a." to NA
-  mutate(across(where(is.character), ~ na_if(.x, "n.a."))) %>%
-  # Convert numeric columns
-  mutate(across(any_of(orbis_numeric_cols), ~ as.numeric(.x))) %>%
-  # Create entity type features
-  mutate(
-    entity_type = factor(entity_type),
-    is_guo = as.integer(entity_type == "GUO")
-  )
-
-message("Orbis companies loaded (before imputation): ", nrow(orbis_data))
-
-# ----------------------------------------
-# Report Missing Values Before Imputation
-# ----------------------------------------
-message("\n--- Missing Values Before Imputation ---")
-
-missing_report <- data.frame(
-  variable = orbis_numeric_cols,
-  n_missing = sapply(orbis_numeric_cols, function(col) sum(is.na(orbis_data[[col]]))),
-  pct_missing = sapply(orbis_numeric_cols, function(col) {
-    round(sum(is.na(orbis_data[[col]])) / nrow(orbis_data) * 100, 1)
-  })
+  .name_repair = "unique"
 )
 
-print(missing_report)
+message("Raw columns found: ", ncol(orbis_raw))
+message("Column names: ")
+print(names(orbis_raw))
 
 # ----------------------------------------
-# Median Imputation
+# Clean and Standardize Column Names
 # ----------------------------------------
-message("\n--- Imputing Missing Values with Median ---")
 
-# Store original values for tracking
-orbis_data <- orbis_data %>%
-  mutate(
-    employees_imputed = is.na(employees_last_value),
-    assets_imputed = is.na(total_assets_eur)
-  )
-
-# Compute medians (before imputation)
-medians <- sapply(orbis_numeric_cols, function(col) {
-  median(orbis_data[[col]], na.rm = TRUE)
-})
-
-message("\nMedian values used for imputation:")
-for (i in seq_along(orbis_numeric_cols)) {
-  message("  ", orbis_numeric_cols[i], ": ", round(medians[i], 2))
+# Create a function to normalize column names
+normalize_col_name <- function(x) {
+  x <- tolower(x)
+  x <- gsub("\\s+", "_", x)
+  x <- gsub("[^a-z0-9_]", "", x)
+  x <- gsub("_+", "_", x)
+  x <- gsub("^_|_$", "", x)
+  x
 }
 
-# Apply median imputation to all numeric columns
-for (col in orbis_numeric_cols) {
-  med_val <- median(orbis_data[[col]], na.rm = TRUE)
-  n_imputed <- sum(is.na(orbis_data[[col]]))
+# Normalize all column names
+names(orbis_raw) <- normalize_col_name(names(orbis_raw))
 
-  if (n_imputed > 0 && !is.na(med_val)) {
-    orbis_data[[col]] <- ifelse(is.na(orbis_data[[col]]), med_val, orbis_data[[col]])
-    message("  Imputed ", n_imputed, " values in ", col)
+message("\nNormalized column names:")
+print(names(orbis_raw))
+
+# ----------------------------------------
+# Column Mapping Based on Actual Data
+# ----------------------------------------
+# Map normalized names to standardized variable names
+
+# Find columns by pattern matching
+find_col <- function(df, patterns) {
+  for (p in patterns) {
+    matches <- grep(p, names(df), value = TRUE, ignore.case = TRUE)
+    if (length(matches) > 0) return(matches[1])
+  }
+  return(NA_character_)
+}
+
+# Identify key columns based on actual Orbis export format
+col_mapping <- list(
+  company_name = find_col(orbis_raw, c("company_name_latin_alphabet", "company_name", "name_latin")),
+  country_iso = find_col(orbis_raw, c("country_iso_code", "country_iso")),
+  city = find_col(orbis_raw, c("city_latin_alphabet", "city_latin", "city")),
+  nace_code = find_col(orbis_raw, c("nace_rev_2_core_code_4_digits", "nace.*core.*code", "nace.*4.*digit")),
+  consolidation_code = find_col(orbis_raw, c("consolidation_code", "consolidation")),
+  last_avail_year = find_col(orbis_raw, c("last_avail_year", "last_available_year")),
+  address_type = find_col(orbis_raw, c("^type$")),
+  peer_group_size = find_col(orbis_raw, c("peer_group_size")),
+  peer_group_name = find_col(orbis_raw, c("peer_group_name")),
+  main_customers = find_col(orbis_raw, c("main_customers")),
+  main_distribution_sites = find_col(orbis_raw, c("main_distribution_sites")),
+  information_provider = find_col(orbis_raw, c("information_provider")),
+  size_classification = find_col(orbis_raw, c("size_classification")),
+  employees_year = find_col(orbis_raw, c("number_of_employees_last_avail_yr")),
+  employees = find_col(orbis_raw, c("number_of_employees_last_avail_value", "number_of_employees")),
+  total_assets_year = find_col(orbis_raw, c("total_assets_th_eur_last_avail_yr")),
+  total_assets_eur = find_col(orbis_raw, c("total_assets_th_eur_last_avail_value")),
+  total_assets_usd = find_col(orbis_raw, c("total_assets_th_usd_last_avail_value")),
+  companies_in_group = find_col(orbis_raw, c("no_of_companies_in_corporate_group", "companies.*corporate.*group")),
+  entity_type = find_col(orbis_raw, c("entity_type")),
+  shareholders = find_col(orbis_raw, c("no_of_shareholders", "shareholders")),
+  subsidiaries = find_col(orbis_raw, c("no_of_subsidiaries", "subsidiaries")),
+  roa = find_col(orbis_raw, c("roa_using_net_income_last_avail_yr", "roa")),
+  rd_ratio = find_col(orbis_raw, c("rd_expenses_operating_revenue_last_avail_yr", "rd_expenses")),
+  export_ratio = find_col(orbis_raw, c("export_revenue_operating_revenue_last_avail_yr")),
+  export_revenue = find_col(orbis_raw, c("export_revenue_th_eur_last_avail_yr")),
+  long_term_debt = find_col(orbis_raw, c("long_term_debt_th_eur_last_avail_yr", "long_term_debt"))
+)
+
+message("\nColumn mapping results:")
+for (name in names(col_mapping)) {
+  message("  ", name, " -> ", ifelse(is.na(col_mapping[[name]]), "NOT FOUND", col_mapping[[name]]))
+}
+
+# ----------------------------------------
+# Select and Rename Columns
+# ----------------------------------------
+
+# Build select expression for available columns
+available_cols <- col_mapping[!is.na(col_mapping)]
+
+if (length(available_cols) == 0) {
+  stop("No expected columns found in ORBIS data!")
+}
+
+# Select and rename columns
+orbis_data <- orbis_raw
+
+# Rename columns that were found
+for (new_name in names(available_cols)) {
+  old_name <- available_cols[[new_name]]
+  if (old_name %in% names(orbis_data) && old_name != new_name) {
+    names(orbis_data)[names(orbis_data) == old_name] <- new_name
   }
 }
 
 # ----------------------------------------
-# Report After Imputation
+# Data Type Conversions
 # ----------------------------------------
-message("\n--- Missing Values After Imputation ---")
+message("\nConverting data types...")
 
-missing_after <- data.frame(
-  variable = orbis_numeric_cols,
-  n_missing = sapply(orbis_numeric_cols, function(col) sum(is.na(orbis_data[[col]])))
+# Define which columns should be numeric
+numeric_cols <- c("employees", "total_assets_eur", "total_assets_usd",
+                  "shareholders", "subsidiaries", "companies_in_group",
+                  "roa", "rd_ratio", "export_ratio", "export_revenue",
+                  "long_term_debt", "peer_group_size")
+
+# Convert "n.a." and similar to NA, then to numeric
+for (col in numeric_cols) {
+  if (col %in% names(orbis_data)) {
+    orbis_data[[col]] <- orbis_data[[col]] %>%
+      as.character() %>%
+      na_if("n.a.") %>%
+      na_if("n.s.") %>%
+      na_if("-") %>%
+      na_if("") %>%
+      as.numeric()
+  }
+}
+
+# Rename to final standardized names
+final_rename <- c(
+  employees_last_value = "employees",
+  n_shareholders = "shareholders",
+  n_subsidiaries = "subsidiaries",
+  n_companies_group = "companies_in_group"
 )
 
-print(missing_after)
+for (new_name in names(final_rename)) {
+  old_name <- final_rename[[new_name]]
+  if (old_name %in% names(orbis_data)) {
+    names(orbis_data)[names(orbis_data) == old_name] <- new_name
+  }
+}
 
-# Summary of imputation
-message("\n--- Imputation Summary ---")
-message("Rows with imputed employees: ", sum(orbis_data$employees_imputed))
-message("Rows with imputed assets: ", sum(orbis_data$assets_imputed))
-message("Total rows retained: ", nrow(orbis_data))
+# Create entity type feature if available
+if ("entity_type" %in% names(orbis_data)) {
+  orbis_data <- orbis_data %>%
+    mutate(
+      entity_type = factor(entity_type),
+      is_guo = as.integer(grepl("GUO", entity_type, ignore.case = TRUE)),
+      is_controlled_sub = as.integer(grepl("Controlled", entity_type, ignore.case = TRUE))
+    )
+} else {
+  orbis_data$is_guo <- NA_integer_
+  orbis_data$is_controlled_sub <- NA_integer_
+}
+
+# Create size classification factor if available
+if ("size_classification" %in% names(orbis_data)) {
+  orbis_data$size_classification <- factor(orbis_data$size_classification)
+}
+
+message("Orbis companies loaded: ", nrow(orbis_data))
+
+# ----------------------------------------
+# Report Missing Values
+# ----------------------------------------
+message("\n--- Missing Values Report ---")
+
+key_vars <- c("company_name", "country_iso", "employees_last_value", "total_assets_eur",
+              "n_shareholders", "n_subsidiaries", "roa", "rd_ratio")
+
+for (col in key_vars) {
+  if (col %in% names(orbis_data)) {
+    n_miss <- sum(is.na(orbis_data[[col]]))
+    pct_miss <- round(n_miss / nrow(orbis_data) * 100, 1)
+    message("  ", col, ": ", n_miss, " missing (", pct_miss, "%)")
+  } else {
+    message("  ", col, ": COLUMN NOT FOUND")
+  }
+}
 
 # ----------------------------------------
 # Standardize Company Names
 # ----------------------------------------
-orbis_data$company_name_std <- orbis_data$company_name %>%
-  trimws() %>%
-  standardize_magerman()
+message("\nStandardizing company names...")
+
+if ("company_name" %in% names(orbis_data)) {
+  orbis_data$company_name_std <- orbis_data$company_name %>%
+    as.character() %>%
+    trimws() %>%
+    standardize_magerman()
+} else {
+  stop("company_name column not found - cannot proceed!")
+}
+
+# ----------------------------------------
+# Final Column Check
+# ----------------------------------------
+# ----------------------------------------
+# Apply SDC-ORBIS Mapping (Rename ORBIS companies to SDC names)
+# ----------------------------------------
+message("\nApplying SDC-ORBIS mapping to rename companies...")
+
+# Load the mapping file
+sdc_orbis_map <- read.csv("raw_downloads/sdc_to_orbis_map.csv", stringsAsFactors = FALSE)
+
+# Clean the mapping and remove country suffix from SDC_data (after last comma)
+sdc_orbis_map <- sdc_orbis_map %>%
+  mutate(
+    SDC_data = trimws(SDC_data),
+    ORBIS_data = trimws(ORBIS_data),
+    # Remove ", Country" from SDC_data (everything after the last comma)
+    SDC_data_clean = sub(",\\s*[^,]*$", "", SDC_data)
+  ) %>%
+  filter(!is.na(ORBIS_data) & ORBIS_data != "")
+
+message("Mapping entries: ", nrow(sdc_orbis_map))
+
+# Create a lookup: ORBIS_data -> SDC_data_clean (without country)
+orbis_to_sdc <- setNames(sdc_orbis_map$SDC_data_clean, sdc_orbis_map$ORBIS_data)
+
+# Rename company_name in orbis_data using the mapping
+orbis_data <- orbis_data %>%
+  mutate(
+    company_name_original = company_name,  # Keep original for reference
+    company_name = ifelse(company_name %in% names(orbis_to_sdc),
+                          orbis_to_sdc[company_name],
+                          company_name)
+  )
+
+renamed_count <- sum(orbis_data$company_name != orbis_data$company_name_original)
+message("Companies renamed using mapping: ", renamed_count, " / ", nrow(orbis_data))
+
+message("\n--- Final Dataset Summary ---")
+message("Total rows: ", nrow(orbis_data))
+message("Total columns: ", ncol(orbis_data))
+message("Columns: ", paste(names(orbis_data), collapse = ", "))
 
 # ----------------------------------------
 # Save Output
