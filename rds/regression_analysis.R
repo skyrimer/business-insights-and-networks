@@ -5,7 +5,7 @@ library(purrr)
 library(countrycode)
 library(config)
 
-source("src/reporting_utils.R")
+source("rds/reporting_utils.R")
 
 cfg <- config::get()
 

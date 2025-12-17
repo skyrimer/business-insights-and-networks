@@ -11,26 +11,26 @@ default:
   jaccard_weight: 0.2
 
   # Raw data directories
-  raw_data_dir: "raw_downloads"
+  raw_data_dir: "data"
 
   # Processed data directory
-  data_dir: "data"
+  data_dir: "working_data"
 
   # Raw input files
-  orbis_raw_file: "raw_downloads/Export 17_12_2025 18_26.xlsx"
-  sdc_raw_file: "raw_downloads/SDC_data_2021.rds"
-  patents_raw_dir: "raw_downloads/patents_view"
-  sdc_orbis_map_file: "raw_downloads/sdc_to_orbis_map.csv"
+  orbis_raw_file: "data/Export 17_12_2025 18_26.xlsx"
+  sdc_raw_file: "data/SDC_data_2021.rds"
+  patents_raw_dir: "data/patents_view"
+  sdc_orbis_map_file: "extra/sdc_to_orbis_map.csv"
 
   # Intermediate processed files
-  orbis_cleaned_file: "data/orbis_cleaned.csv"
-  sdc_filtered_file: "data/filtered_sdc.csv"
-  patents_processed_file: "data/firm_patent_variables.csv"
+  orbis_cleaned_file: "working_data/orbis_cleaned.csv"
+  sdc_filtered_file: "working_data/filtered_sdc.csv"
+  patents_processed_file: "working_data/firm_patent_variables.csv"
 
   # Merged data files
-  merged_data_file: "data/sdc_patents_orbis_merged.csv"
+  merged_data_file: "working_data/sdc_patents_orbis_merged.csv"
 
   # Analysis output files
-  analysis_sample_file: "data/analysis_sample.csv"
-  model_comparison_file: "data/model_comparison.csv"
-  regression_models_file: "data/regression_models.rds"
+  analysis_sample_file: "working_data/analysis_sample.csv"
+  model_comparison_file: "working_data/model_comparison.csv"
+  regression_models_file: "working_data/regression_models.rds"

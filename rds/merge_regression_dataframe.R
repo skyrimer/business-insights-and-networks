@@ -4,7 +4,7 @@ library(stringdist)
 library(stringr)
 library(config)
 
-source("src/reporting_utils.R")
+source("rds/reporting_utils.R")
 
 if (!requireNamespace("nstandr", quietly = TRUE)) {
   if (!requireNamespace("devtools", quietly = TRUE)) install.packages("devtools")

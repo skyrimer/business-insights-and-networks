@@ -2,21 +2,17 @@ library(dplyr)
 library(readxl)
 library(config)
 
-# We use nstandr for name standardization (Magerman method)
 if (!requireNamespace("nstandr", quietly = TRUE)) {
   if (!requireNamespace("devtools", quietly = TRUE)) install.packages("devtools")
   devtools::install_github("stasvlasov/nstandr")
 }
 library(nstandr)
-source("src/reporting_utils.R")
+source("rds/reporting_utils.R")
 
 
 cfg <- config::get()
 print_section("Loading Orbis data...")
 
-# ----------------------------------------
-# Load Orbis Data
-# ----------------------------------------
 message("Loading Orbis data...")
 
 # Read the Excel file
@@ -30,9 +26,6 @@ message("Raw columns found: ", ncol(orbis_raw))
 message("Column names: ")
 print(names(orbis_raw))
 
-# ----------------------------------------
-# Clean and Standardize Column Names
-# ----------------------------------------
 
 # Create a function to normalize column names
 normalize_col_name <- function(x) {
@@ -50,10 +43,6 @@ names(orbis_raw) <- normalize_col_name(names(orbis_raw))
 message("\nNormalized column names:")
 print(names(orbis_raw))
 
-# ----------------------------------------
-# Column Mapping Based on Actual Data
-# ----------------------------------------
-# Map normalized names to standardized variable names
 
 # Find columns by pattern matching
 find_col <- function(df, patterns) {
@@ -101,10 +90,6 @@ message("\nColumn mapping results:")
 for (name in names(col_mapping)) {
   message("  ", name, " -> ", ifelse(is.na(col_mapping[[name]]), "NOT FOUND", col_mapping[[name]]))
 }
-
-# ----------------------------------------
-# Select and Rename Columns
-# ----------------------------------------
 
 # Build select expression for available columns
 available_cols <- col_mapping[!is.na(col_mapping)]
@@ -209,7 +194,6 @@ sdc_orbis_map <- sdc_orbis_map %>%
   mutate(
     SDC_data = trimws(SDC_data),
     ORBIS_data = trimws(ORBIS_data),
-    # Remove ", Country" from SDC_data (everything after the last comma)
     SDC_data_clean = sub(",\\s*[^,]*$", "", SDC_data)
   ) %>%
   filter(!is.na(ORBIS_data) & ORBIS_data != "")
