@@ -1,5 +1,3 @@
-install.packages("config")
-
 library(dplyr)
 library(tidyr)
 library(igraph)
@@ -9,7 +7,7 @@ library(janitor)
 library(config)
 
 process_and_save_sdc <- function(rds_path, target_sic, target_country, out_path,
-                                  min_date = NULL, exclude_terminated = TRUE) {
+                                 min_date = NULL, exclude_terminated = TRUE) {
   # 1. Load data and clean column names
   sdc <- readRDS(rds_path) %>%
     as_tibble() %>%
@@ -21,14 +19,14 @@ process_and_save_sdc <- function(rds_path, target_sic, target_country, out_path,
     filter(!is.na(participants))
 
   sdc_clean <- sdc_clean %>%
-  filter(
-    status == "Completed/Signed",
-    type == "Strategic Alliance",
-    date_terminated == "",
-    date_announced > min_date,
-    !is.na(participants),
-    !is.na(deal_number)
-  )
+    filter(
+      status == "Completed/Signed",
+      type == "Strategic Alliance",
+      date_terminated == "",
+      date_announced > min_date,
+      !is.na(participants),
+      !is.na(deal_number)
+    )
 
   # 5. Assign continent based on participant_nation
   sdc_clean <- sdc_clean %>%
@@ -88,7 +86,6 @@ process_and_save_sdc <- function(rds_path, target_sic, target_country, out_path,
 
   result_df
 }
-
 
 plot_network <- function(dataframe, target_sic, target_country) {
   focal_firms <- dataframe %>%
@@ -151,6 +148,8 @@ plot_network <- function(dataframe, target_sic, target_country) {
 
   invisible(g)
 }
+
+
 
 cfg <- config::get()
 

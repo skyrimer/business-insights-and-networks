@@ -4,6 +4,12 @@ default:
   focal_country: "United States"
   min_date: "2009-12-31"
 
+  # Matching thresholds
+  fuzzy_match_threshold: 0.85
+  jw_weight: 0.5
+  lv_weight: 0.3
+  jaccard_weight: 0.2
+
   # Raw data directories
   raw_data_dir: "raw_downloads"
 
@@ -14,17 +20,17 @@ default:
   orbis_raw_file: "raw_downloads/Export 17_12_2025 18_26.xlsx"
   sdc_raw_file: "raw_downloads/SDC_data_2021.rds"
   patents_raw_dir: "raw_downloads/patents_view"
+  sdc_orbis_map_file: "raw_downloads/sdc_to_orbis_map.csv"
 
   # Intermediate processed files
   orbis_cleaned_file: "data/orbis_cleaned.csv"
   sdc_filtered_file: "data/filtered_sdc.csv"
-  patents_processed_file: "data/firm_patent_variables.parquet"
+  patents_processed_file: "data/firm_patent_variables.csv"
 
   # Merged data files
-  merged_data_parquet: "data/sdc_patents_orbis_merged.parquet"
-  merged_data_csv: "data/sdc_patents_orbis_merged.csv"
+  merged_data_file: "data/sdc_patents_orbis_merged.csv"
 
   # Analysis output files
-  analysis_sample_parquet: "data/analysis_sample.parquet"
-  analysis_sample_csv: "data/analysis_sample.csv"
+  analysis_sample_file: "data/analysis_sample.csv"
   model_comparison_file: "data/model_comparison.csv"
+  regression_models_file: "data/regression_models.rds"

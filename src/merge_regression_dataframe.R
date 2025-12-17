@@ -1,9 +1,10 @@
 library(dplyr)
 library(tidyr)
-library(arrow)
 library(stringdist)
 library(stringr)
 library(config)
+
+source("src/reporting_utils.R")
 
 if (!requireNamespace("nstandr", quietly = TRUE)) {
   if (!requireNamespace("devtools", quietly = TRUE)) install.packages("devtools")
@@ -11,12 +12,13 @@ if (!requireNamespace("nstandr", quietly = TRUE)) {
 }
 library(nstandr)
 
-# ----------------------------------------
-# Hybrid Matching Functions
-# ----------------------------------------
+cfg <- config::get()
 
-compute_match_score <- function(name1, name2) {
-  if (nchar(name1) == 0 || nchar(name2) == 0) return(0)
+compute_match_score <- function(name1, name2, jw_weight = cfg$jw_weight,
+                                lv_weight = cfg$lv_weight, jaccard_weight = cfg$jaccard_weight) {
+  if (nchar(name1) == 0 || nchar(name2) == 0) {
+    return(0)
+  }
 
   jw_score <- 1 - stringdist(name1, name2, method = "jw", p = 0.1)
 
@@ -33,14 +35,14 @@ compute_match_score <- function(name1, name2) {
     jaccard_score <- 0
   } else {
     jaccard_score <- length(intersect(tokens1, tokens2)) /
-                     length(union(tokens1, tokens2))
+      length(union(tokens1, tokens2))
   }
 
-  final_score <- 0.5 * jw_score + 0.3 * lv_score + 0.2 * jaccard_score
+  final_score <- jw_weight * jw_score + lv_weight * lv_score + jaccard_weight * jaccard_score
   return(final_score)
 }
 
-find_best_match_hybrid <- function(name, candidates_df, name_col, threshold = 0.85) {
+find_best_match_hybrid <- function(name, candidates_df, name_col, threshold = cfg$fuzzy_match_threshold) {
   prefix <- substr(tolower(name), 1, 3)
 
   blocked_candidates <- candidates_df %>%
@@ -68,37 +70,24 @@ find_best_match_hybrid <- function(name, candidates_df, name_col, threshold = 0.
   return(list(match = NA_character_, score = NA_real_))
 }
 
-# ----------------------------------------
-# Load Configuration
-# ----------------------------------------
-cfg <- config::get()
+print_header("DATA MERGING PIPELINE")
+print_section("Loading datasets...")
 
-# ----------------------------------------
-# 1. Load Data Sources
-# ----------------------------------------
-message("Loading datasets...")
-
-patent_data <- read_parquet(cfg$patents_processed_file)
+patent_data <- read.csv(cfg$patents_processed_file, stringsAsFactors = FALSE)
 sdc_data <- read.csv(cfg$sdc_filtered_file, stringsAsFactors = FALSE)
 orbis_data <- read.csv(cfg$orbis_cleaned_file, stringsAsFactors = FALSE)
 
-message("Patent data rows: ", nrow(patent_data))
-message("SDC data rows: ", nrow(sdc_data))
-message("Orbis data rows: ", nrow(orbis_data))
+print_metrics(list(
+  "Patent data rows" = nrow(patent_data),
+  "SDC data rows" = nrow(sdc_data),
+  "Orbis data rows" = nrow(orbis_data)
+))
 
-# ============================================
-# SDC + ORBIS MERGE (Direct join on company names)
-# ============================================
-# Note: ORBIS company_name has been pre-renamed to match SDC format in orbis_data.R
-message("\n========================================")
-message("    SDC + ORBIS MERGE (DIRECT JOIN)")
-message("========================================")
+print_header("SDC + ORBIS MERGE (DIRECT JOIN)")
 
-# Store original names before any standardization
 sdc_data <- sdc_data %>%
   mutate(participants_original = participants)
 
-# Select ORBIS columns to merge
 orbis_merge_cols <- c(
   "company_name", "country_iso", "city", "nace_code", "entity_type",
   "employees_last_value", "total_assets_eur", "total_assets_usd",
@@ -110,23 +99,19 @@ orbis_merge_cols <- c(
 orbis_for_merge <- orbis_data %>%
   select(any_of(orbis_merge_cols))
 
-# Direct join: SDC participants -> ORBIS company_name
 merged_data <- sdc_data %>%
   left_join(
     orbis_for_merge,
     by = c("participants_original" = "company_name")
   ) %>%
   mutate(orbis_match_type = ifelse(!is.na(country_iso) | !is.na(employees_last_value) | !is.na(total_assets_eur),
-                                     "matched", "unmatched"))
+    "matched", "unmatched"
+  ))
 
 orbis_matched <- sum(merged_data$orbis_match_type == "matched")
-message("Successfully matched with ORBIS: ", orbis_matched, " / ", nrow(merged_data),
-        " (", round(orbis_matched / nrow(merged_data) * 100, 1), "%)")
+print_match_summary(orbis_matched, nrow(merged_data), "ORBIS Direct Join Results")
 
-# ----------------------------------------
-# 2. Standardize Company Names (AFTER MERGE)
-# ----------------------------------------
-message("\nStandardizing company names...")
+print_section("Standardizing company names...")
 
 patent_data <- patent_data %>%
   mutate(
@@ -141,18 +126,8 @@ merged_data <- merged_data %>%
     participants_std = participants_original %>% trimws() %>% standardize_magerman()
   )
 
-
-# ============================================
-# PATENT MATCHING
-# ============================================
-message("\n========================================")
-message("         PATENT MATCHING")
-message("========================================")
-
-# ----------------------------------------
-# Phase 1: Exact Patent Matching
-# ----------------------------------------
-message("\n--- Phase 1: Exact Matching ---")
+print_header("PATENT MATCHING")
+print_subheader("Phase 1: Exact Matching")
 
 merged_data <- merged_data %>%
   left_join(
@@ -162,40 +137,30 @@ merged_data <- merged_data %>%
   mutate(patent_match_type = ifelse(!is.na(assignee), "exact", NA_character_))
 
 exact_patent_matches <- sum(!is.na(merged_data$assignee))
-message("Exact matches: ", exact_patent_matches, " / ", nrow(merged_data),
-        " (", round(exact_patent_matches / nrow(merged_data) * 100, 1), "%)")
+print_match_summary(exact_patent_matches, nrow(merged_data), "Exact Patent Matches")
 
-# ----------------------------------------
-# Phase 2: Hybrid Fuzzy Patent Matching
-# ----------------------------------------
-message("\n--- Phase 2: Hybrid Fuzzy Matching ---")
+print_subheader("Phase 2: Hybrid Fuzzy Matching")
 
-# Get unique unmatched company names to avoid redundant matching
 unmatched_companies <- merged_data %>%
   filter(is.na(assignee)) %>%
   distinct(participants_std) %>%
   pull(participants_std)
 
-message("Unique companies without exact match: ", length(unmatched_companies))
+print_info(sprintf("Unique companies without exact match: %d", length(unmatched_companies)))
 
 if (length(unmatched_companies) > 0) {
-  message("Running hybrid matching (Jaro-Winkler + Levenshtein + Jaccard)...")
+  print_info("Running hybrid matching (Jaro-Winkler + Levenshtein + Jaccard)...")
 
   total_unmatched <- length(unmatched_companies)
-  pb_interval <- max(1, floor(total_unmatched / 10))
-
   fuzzy_results <- vector("list", total_unmatched)
 
-  for (i in seq_along(unmatched_companies)) {
-    name <- unmatched_companies[i]
-    fuzzy_results[[i]] <- find_best_match_hybrid(name, patent_data, "assignee_std", threshold = 0.85)
+  pb <- create_progress_bar(total_unmatched, "Fuzzy Matching")
 
-    if (i %% pb_interval == 0) {
-      message("  Progress: ", round(i / total_unmatched * 100), "%")
-    }
+  for (i in seq_along(unmatched_companies)) {
+    fuzzy_results[[i]] <- find_best_match_hybrid(unmatched_companies[i], patent_data, "assignee_std", threshold = cfg$fuzzy_match_threshold)
+    pb <- update_progress(pb)
   }
 
-  # Create lookup table for fuzzy matches
   fuzzy_lookup <- data.frame(
     participants_std = unmatched_companies,
     fuzzy_match_std = sapply(fuzzy_results, function(x) x$match),
@@ -203,15 +168,18 @@ if (length(unmatched_companies) > 0) {
   )
 
   fuzzy_patent_success <- sum(!is.na(fuzzy_lookup$fuzzy_match_std))
-  message("\nHybrid matches found: ", fuzzy_patent_success, " / ", length(unmatched_companies))
+
+  cat("\n")
+  print_match_summary(fuzzy_patent_success, length(unmatched_companies), "Fuzzy Patent Matches")
 
   if (fuzzy_patent_success > 0) {
     valid_scores <- sapply(fuzzy_results, function(x) x$score)
     valid_scores <- valid_scores[!is.na(valid_scores)]
-    message("  Score range: ", round(min(valid_scores), 3), " - ", round(max(valid_scores), 3))
-    message("  Mean score: ", round(mean(valid_scores), 3))
+    print_metrics(list(
+      "Score range" = sprintf("%.3f - %.3f", min(valid_scores), max(valid_scores)),
+      "Mean score" = mean(valid_scores)
+    ))
 
-    # Join fuzzy matches back to merged_data
     fuzzy_lookup <- fuzzy_lookup %>%
       filter(!is.na(fuzzy_match_std)) %>%
       left_join(
@@ -219,28 +187,34 @@ if (length(unmatched_companies) > 0) {
         by = c("fuzzy_match_std" = "assignee_std")
       )
 
-    # Update merged_data with fuzzy matches
-    for (i in seq_len(nrow(fuzzy_lookup))) {
-      match_rows <- which(merged_data$participants_std == fuzzy_lookup$participants_std[i] &
-                          is.na(merged_data$assignee))
-      if (length(match_rows) > 0) {
-        merged_data$assignee[match_rows] <- fuzzy_lookup$assignee[i]
-        merged_data$total_applications[match_rows] <- fuzzy_lookup$total_applications[i]
-        merged_data$granted_patents[match_rows] <- fuzzy_lookup$granted_patents[i]
-        merged_data$avg_ipc_scope[match_rows] <- fuzzy_lookup$avg_ipc_scope[i]
-        merged_data$avg_team_size[match_rows] <- fuzzy_lookup$avg_team_size[i]
-        merged_data$grant_success_rate[match_rows] <- fuzzy_lookup$grant_success_rate[i]
-        merged_data$total_ipc_mentions[match_rows] <- fuzzy_lookup$total_ipc_mentions[i]
-        merged_data$tech_specialist_hhi[match_rows] <- fuzzy_lookup$tech_specialist_hhi[i]
-        merged_data$patent_match_type[match_rows] <- "fuzzy"
-      }
-    }
+    merged_data <- merged_data %>%
+      left_join(
+        fuzzy_lookup %>%
+          select(participants_std,
+            fuzzy_assignee = assignee, fuzzy_total_applications = total_applications,
+            fuzzy_granted_patents = granted_patents, fuzzy_avg_ipc_scope = avg_ipc_scope,
+            fuzzy_avg_team_size = avg_team_size, fuzzy_grant_success_rate = grant_success_rate,
+            fuzzy_total_ipc_mentions = total_ipc_mentions, fuzzy_tech_specialist_hhi = tech_specialist_hhi
+          ),
+        by = "participants_std"
+      ) %>%
+      mutate(
+        assignee = coalesce(assignee, fuzzy_assignee),
+        total_applications = coalesce(total_applications, fuzzy_total_applications),
+        granted_patents = coalesce(granted_patents, fuzzy_granted_patents),
+        avg_ipc_scope = coalesce(avg_ipc_scope, fuzzy_avg_ipc_scope),
+        avg_team_size = coalesce(avg_team_size, fuzzy_avg_team_size),
+        grant_success_rate = coalesce(grant_success_rate, fuzzy_grant_success_rate),
+        total_ipc_mentions = coalesce(total_ipc_mentions, fuzzy_total_ipc_mentions),
+        tech_specialist_hhi = coalesce(tech_specialist_hhi, fuzzy_tech_specialist_hhi),
+        patent_match_type = if_else(!is.na(fuzzy_assignee) & is.na(patent_match_type), "fuzzy", patent_match_type)
+      ) %>%
+      select(-starts_with("fuzzy_"))
   }
 } else {
   fuzzy_patent_success <- 0
 }
 
-# Fill patent NAs with zeros
 merged_data <- merged_data %>%
   mutate(
     patent_match_type = replace_na(patent_match_type, "unmatched"),
@@ -253,49 +227,40 @@ merged_data <- merged_data %>%
     tech_specialist_hhi = replace_na(tech_specialist_hhi, 0)
   )
 
-# ============================================
-# FINAL SUMMARY
-# ============================================
 total_patent_matched <- sum(merged_data$total_applications > 0)
-total_orbis_matched <- sum(merged_data$orbis_match_type == "mapped")
+total_orbis_matched <- sum(merged_data$orbis_match_type == "matched")
 unique_companies <- n_distinct(merged_data$participants_std)
 unique_deals <- n_distinct(merged_data$deal_number)
 
-message("\n========================================")
-message("         FINAL MERGE SUMMARY")
-message("========================================")
-message("Total rows:             ", nrow(merged_data))
-message("Unique companies:       ", unique_companies)
-message("Unique deals:           ", unique_deals)
-message("----------------------------------------")
-message("SDC + ORBIS (via mapping):")
-message("  Matched rows:         ", total_orbis_matched,
-        " (", round(total_orbis_matched / nrow(merged_data) * 100, 1), "%)")
-message("  Unmatched rows:       ", nrow(merged_data) - total_orbis_matched,
-        " (", round((nrow(merged_data) - total_orbis_matched) / nrow(merged_data) * 100, 1), "%)")
-message("----------------------------------------")
-message("PATENT MATCHING:")
-message("  Exact matches:        ", exact_patent_matches,
-        " (", round(exact_patent_matches / nrow(merged_data) * 100, 1), "%)")
-message("  Fuzzy matches:        ", sum(merged_data$patent_match_type == "fuzzy"),
-        " (", round(sum(merged_data$patent_match_type == "fuzzy") / nrow(merged_data) * 100, 1), "%)")
-message("  Total matched:        ", total_patent_matched,
-        " (", round(total_patent_matched / nrow(merged_data) * 100, 1), "%)")
-message("========================================")
+print_header("FINAL MERGE SUMMARY")
 
-message("\nOrbis match type distribution:")
-print(table(merged_data$orbis_match_type))
+print_metrics(list(
+  "Total rows" = nrow(merged_data),
+  "Unique companies" = unique_companies,
+  "Unique deals" = unique_deals
+))
 
-message("\nPatent match type distribution:")
-print(table(merged_data$patent_match_type))
+print_subheader("SDC + ORBIS Matching")
+print_match_summary(total_orbis_matched, nrow(merged_data), "ORBIS Matches")
 
-# ----------------------------------------
-# Save Output
-# ----------------------------------------
-write_parquet(merged_data, cfg$merged_data_parquet, compression = "gzip")
-write.csv(merged_data, cfg$merged_data_csv, row.names = FALSE)
-write_parquet(merged_data, cfg$merged_data_parquet, compression = "gzip")
+print_subheader("Patent Matching")
+print_match_summary(exact_patent_matches, nrow(merged_data), "Exact Matches", show_bar = FALSE)
+print_match_summary(sum(merged_data$patent_match_type == "fuzzy"), nrow(merged_data), "Fuzzy Matches", show_bar = FALSE)
+print_match_summary(total_patent_matched, nrow(merged_data), "Total Patent Matches")
 
-message("\nSaved CSV to: ", cfg$merged_data_csv)
-message("Saved Parquet to: ", cfg$merged_data_parquet)
-message("Done.")
+orbis_dist <- as.data.frame(table(merged_data$orbis_match_type))
+names(orbis_dist) <- c("Match Type", "Count")
+orbis_dist$Percentage <- sprintf("%.1f%%", orbis_dist$Count / nrow(merged_data) * 100)
+print_summary_table(orbis_dist, "ORBIS Match Type Distribution")
+
+patent_dist <- as.data.frame(table(merged_data$patent_match_type))
+names(patent_dist) <- c("Match Type", "Count")
+patent_dist$Percentage <- sprintf("%.1f%%", patent_dist$Count / nrow(merged_data) * 100)
+print_summary_table(patent_dist, "Patent Match Type Distribution")
+
+print_section("Saving output files...")
+
+write.csv(merged_data, cfg$merged_data_file, row.names = FALSE)
+
+print_success(sprintf("Merged data saved to: %s", cfg$merged_data_file))
+print_success("Data merging pipeline completed!")

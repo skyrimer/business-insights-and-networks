@@ -1,32 +1,30 @@
-
 library(tidyverse)
-library(arrow)
 library(countrycode)
 library(fs)
 library(config)
 
-# --- Configuration ---
 cfg <- config::get()
 path <- cfg$patents_raw_dir
 files <- dir_ls(path, glob = "*.csv")
 
-# --- Load Files ---
 message(paste("Loading", length(files), "files..."))
 
 df <- map_dfr(files, function(f) {
   read_csv(f,
-           col_types = cols(.default = "c"),
-           show_col_types = FALSE)
+    col_types = cols(.default = "c"),
+    show_col_types = FALSE
+  )
 }, .progress = TRUE)
 
 message(paste("Total raw rows:", nrow(df)))
 
-# --- Data Cleaning ---
 # Drop unused columns and filter nulls
 df <- df %>%
-  select(patent_number, application_number, application_year, grant_year,
-         assignee, country, n_ipc, n_cpc, team_size,
-         ipc_sections) %>%
+  select(
+    patent_number, application_number, application_year, grant_year,
+    assignee, country, n_ipc, n_cpc, team_size,
+    ipc_sections
+  ) %>%
   filter(!is.na(application_number) & !is.na(application_year))
 
 # Handle n_cpc and n_ipc (Fill NA with 0, convert to int, filter < 50)
@@ -45,13 +43,11 @@ df <- df %>%
   mutate(assignee = replace_na(assignee, "Unknown assignee")) %>%
   filter(assignee != "Unknown assignee")
 
-# --- Country Mapping ---
 df$country_mapped <- countrycode(df$country, origin = "iso2c", destination = "country.name")
 df <- df %>%
   mutate(country = coalesce(country_mapped, "Unknown country")) %>%
   select(-country_mapped)
 
-# --- IPC Section One-Hot Encoding ---
 df <- df %>% mutate(temp_row_id = row_number())
 
 dummies <- df %>%
@@ -72,8 +68,10 @@ df <- df %>%
   select(-temp_row_id, -ipc_sections)
 
 # Ensure all IPC columns exist (A-H)
-ipc_section_cols <- c("ipc_A", "ipc_B", "ipc_C", "ipc_D",
-                      "ipc_E", "ipc_F", "ipc_G", "ipc_H")
+ipc_section_cols <- c(
+  "ipc_A", "ipc_B", "ipc_C", "ipc_D",
+  "ipc_E", "ipc_F", "ipc_G", "ipc_H"
+)
 for (col in ipc_section_cols) {
   if (!col %in% names(df)) {
     df[[col]] <- 0
@@ -84,7 +82,6 @@ df <- df %>%
 
 message(paste("Cleaned rows:", nrow(df)))
 
-# --- Aggregation: Creating Firm-Level Variables ---
 message("Aggregating data to Assignee level...")
 
 firm_df <- df %>%
@@ -105,16 +102,14 @@ firm_df <- df %>%
     .groups = "drop"
   )
 
-# --- Feature Engineering: Derived Variables ---
 firm_df <- firm_df %>%
   mutate(
     grant_success_rate = ifelse(total_applications > 0, granted_patents / total_applications, 0),
     total_ipc_mentions = sum_ipc_A + sum_ipc_B + sum_ipc_C + sum_ipc_D +
-                         sum_ipc_E + sum_ipc_F + sum_ipc_G + sum_ipc_H,
+      sum_ipc_E + sum_ipc_F + sum_ipc_G + sum_ipc_H,
     share_tech_G = ifelse(total_ipc_mentions > 0, sum_ipc_G / total_ipc_mentions, 0)
   )
 
-# --- Calculating HHI (Tech Specialist Score) ---
 firm_df <- firm_df %>%
   mutate(
     share_A = ifelse(total_ipc_mentions > 0, sum_ipc_A / total_ipc_mentions, 0),
@@ -126,10 +121,9 @@ firm_df <- firm_df %>%
     share_G = ifelse(total_ipc_mentions > 0, sum_ipc_G / total_ipc_mentions, 0),
     share_H = ifelse(total_ipc_mentions > 0, sum_ipc_H / total_ipc_mentions, 0),
     tech_specialist_hhi = share_A^2 + share_B^2 + share_C^2 + share_D^2 +
-                          share_E^2 + share_F^2 + share_G^2 + share_H^2
+      share_E^2 + share_F^2 + share_G^2 + share_H^2
   ) %>%
   select(-starts_with("share_"), -starts_with("sum_ipc_"))
 
-# --- Output ---
 message(paste("Saving processed data for", nrow(firm_df), "unique assignees."))
-write_parquet(firm_df, cfg$patents_processed_file, compression = "gzip")
+write.csv(firm_df, cfg$patents_processed_file, row.names = FALSE)

@@ -1,4 +1,3 @@
-
 library(dplyr)
 library(readxl)
 library(config)
@@ -9,11 +8,11 @@ if (!requireNamespace("nstandr", quietly = TRUE)) {
   devtools::install_github("stasvlasov/nstandr")
 }
 library(nstandr)
+source("src/reporting_utils.R")
 
-# ----------------------------------------
-# Load Configuration
-# ----------------------------------------
+
 cfg <- config::get()
+print_section("Loading Orbis data...")
 
 # ----------------------------------------
 # Load Orbis Data
@@ -60,7 +59,9 @@ print(names(orbis_raw))
 find_col <- function(df, patterns) {
   for (p in patterns) {
     matches <- grep(p, names(df), value = TRUE, ignore.case = TRUE)
-    if (length(matches) > 0) return(matches[1])
+    if (length(matches) > 0) {
+      return(matches[1])
+    }
   }
   return(NA_character_)
 }
@@ -115,24 +116,19 @@ if (length(available_cols) == 0) {
 # Select and rename columns
 orbis_data <- orbis_raw
 
-# Rename columns that were found
-for (new_name in names(available_cols)) {
-  old_name <- available_cols[[new_name]]
-  if (old_name %in% names(orbis_data) && old_name != new_name) {
-    names(orbis_data)[names(orbis_data) == old_name] <- new_name
-  }
-}
+# Build rename vector dynamically
+rename_vec <- setNames(unlist(available_cols), names(available_cols))
+orbis_data <- orbis_data %>% rename(!!!rename_vec[rename_vec %in% names(orbis_data)])
 
-# ----------------------------------------
-# Data Type Conversions
-# ----------------------------------------
 message("\nConverting data types...")
 
 # Define which columns should be numeric
-numeric_cols <- c("employees", "total_assets_eur", "total_assets_usd",
-                  "shareholders", "subsidiaries", "companies_in_group",
-                  "roa", "rd_ratio", "export_ratio", "export_revenue",
-                  "long_term_debt", "peer_group_size")
+numeric_cols <- c(
+  "employees", "total_assets_eur", "total_assets_usd",
+  "shareholders", "subsidiaries", "companies_in_group",
+  "roa", "rd_ratio", "export_ratio", "export_revenue",
+  "long_term_debt", "peer_group_size"
+)
 
 # Convert "n.a." and similar to NA, then to numeric
 for (col in numeric_cols) {
@@ -148,19 +144,13 @@ for (col in numeric_cols) {
 }
 
 # Rename to final standardized names
-final_rename <- c(
-  employees_last_value = "employees",
-  n_shareholders = "shareholders",
-  n_subsidiaries = "subsidiaries",
-  n_companies_group = "companies_in_group"
-)
-
-for (new_name in names(final_rename)) {
-  old_name <- final_rename[[new_name]]
-  if (old_name %in% names(orbis_data)) {
-    names(orbis_data)[names(orbis_data) == old_name] <- new_name
-  }
-}
+orbis_data <- orbis_data %>%
+  rename(
+    employees_last_value = any_of("employees"),
+    n_shareholders = any_of("shareholders"),
+    n_subsidiaries = any_of("subsidiaries"),
+    n_companies_group = any_of("companies_in_group")
+  )
 
 # Create entity type feature if available
 if ("entity_type" %in% names(orbis_data)) {
@@ -182,13 +172,12 @@ if ("size_classification" %in% names(orbis_data)) {
 
 message("Orbis companies loaded: ", nrow(orbis_data))
 
-# ----------------------------------------
-# Report Missing Values
-# ----------------------------------------
 message("\n--- Missing Values Report ---")
 
-key_vars <- c("company_name", "country_iso", "employees_last_value", "total_assets_eur",
-              "n_shareholders", "n_subsidiaries", "roa", "rd_ratio")
+key_vars <- c(
+  "company_name", "country_iso", "employees_last_value", "total_assets_eur",
+  "n_shareholders", "n_subsidiaries", "roa", "rd_ratio"
+)
 
 for (col in key_vars) {
   if (col %in% names(orbis_data)) {
@@ -200,9 +189,6 @@ for (col in key_vars) {
   }
 }
 
-# ----------------------------------------
-# Standardize Company Names
-# ----------------------------------------
 message("\nStandardizing company names...")
 
 if ("company_name" %in% names(orbis_data)) {
@@ -214,16 +200,9 @@ if ("company_name" %in% names(orbis_data)) {
   stop("company_name column not found - cannot proceed!")
 }
 
-# ----------------------------------------
-# Final Column Check
-# ----------------------------------------
-# ----------------------------------------
-# Apply SDC-ORBIS Mapping (Rename ORBIS companies to SDC names)
-# ----------------------------------------
 message("\nApplying SDC-ORBIS mapping to rename companies...")
 
-# Load the mapping file
-sdc_orbis_map <- read.csv("raw_downloads/sdc_to_orbis_map.csv", stringsAsFactors = FALSE)
+sdc_orbis_map <- read.csv(cfg$sdc_orbis_map_file, stringsAsFactors = FALSE)
 
 # Clean the mapping and remove country suffix from SDC_data (after last comma)
 sdc_orbis_map <- sdc_orbis_map %>%
@@ -243,10 +222,11 @@ orbis_to_sdc <- setNames(sdc_orbis_map$SDC_data_clean, sdc_orbis_map$ORBIS_data)
 # Rename company_name in orbis_data using the mapping
 orbis_data <- orbis_data %>%
   mutate(
-    company_name_original = company_name,  # Keep original for reference
+    company_name_original = company_name, # Keep original for reference
     company_name = ifelse(company_name %in% names(orbis_to_sdc),
-                          orbis_to_sdc[company_name],
-                          company_name)
+      orbis_to_sdc[company_name],
+      company_name
+    )
   )
 
 renamed_count <- sum(orbis_data$company_name != orbis_data$company_name_original)
@@ -257,9 +237,6 @@ message("Total rows: ", nrow(orbis_data))
 message("Total columns: ", ncol(orbis_data))
 message("Columns: ", paste(names(orbis_data), collapse = ", "))
 
-# ----------------------------------------
-# Save Output
-# ----------------------------------------
 write.csv(orbis_data, cfg$orbis_cleaned_file, row.names = FALSE)
 message("\nSaved to ", cfg$orbis_cleaned_file)
 message("Done.")
